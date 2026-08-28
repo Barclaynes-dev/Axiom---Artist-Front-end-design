@@ -1894,9 +1894,7 @@
         height: 44px !important;
         border-radius: 50% !important;
         border: 1px solid rgba(255, 255, 255, 0.18) !important;
-        background: rgba(0, 0, 0, 0.45) !important;
-        backdrop-filter: blur(8px) !important;
-        -webkit-backdrop-filter: blur(8px) !important;
+        background: rgba(0, 0, 0, 0.65) !important;
         flex-direction: column !important;
         align-items: center !important;
         justify-content: center !important;
@@ -1946,10 +1944,24 @@
         border-color: #FFCC00 !important;
       }
 
-      /* Custom Cursor Overlay Overrides for PC Emulation visibility */
+      /* Hide custom cursor completely on mobile — dot/ring are desktop-only */
       #c-dot,
       #c-ring {
-        z-index: 10005 !important;
+        display: none !important;
+      }
+
+      body {
+        cursor: auto !important;
+      }
+
+      .nav-menu-btn,
+      .album-card,
+      .streaming-item,
+      .tour-item,
+      .tour-btn,
+      .rotary-knob,
+      .rotary-item {
+        cursor: pointer !important;
       }
 
       /* Rotary Dial Overlay Container with see-through glassmorphism */
@@ -1957,9 +1969,7 @@
         position: fixed;
         inset: 0;
         z-index: 10000;
-        background: rgba(10, 10, 12, 0.72);
-        backdrop-filter: blur(15px);
-        -webkit-backdrop-filter: blur(15px);
+        background: rgba(6, 6, 8, 0.99);
         display: flex !important;
         flex-direction: column !important;
         align-items: center !important;
@@ -2014,7 +2024,6 @@
       .rotary-tick.active {
         stroke: #FFCC00;
         stroke-width: 3.5px;
-        filter: drop-shadow(0 0 6px rgba(255, 204, 0, 0.8));
       }
 
       /* Category Items in arc */
@@ -2138,6 +2147,7 @@
           0 0 0 4px rgba(255, 255, 255, 0.05),
           0 0 0 1px rgba(255, 255, 255, 0.15);
         will-change: transform;
+        touch-action: none;
       }
 
       /* Conic Brushed Metal Gradient */
@@ -2760,20 +2770,23 @@
     const dot = document.getElementById('c-dot');
     const ring = document.getElementById('c-ring');
     let mx = -100, my = -100, rx = -100, ry = -100;
+    const isDesktopCursor = window.innerWidth > 900;
 
-    document.addEventListener('mousemove', e => { mx = e.clientX; my = e.clientY; });
-    (function moveCursor() {
-      rx += (mx - rx) * 0.14;
-      ry += (my - ry) * 0.14;
-      dot.style.left = mx + 'px'; dot.style.top = my + 'px';
-      ring.style.left = rx + 'px'; ring.style.top = ry + 'px';
-      requestAnimationFrame(moveCursor);
-    })();
+    if (isDesktopCursor) {
+      document.addEventListener('mousemove', e => { mx = e.clientX; my = e.clientY; });
+      (function moveCursor() {
+        rx += (mx - rx) * 0.14;
+        ry += (my - ry) * 0.14;
+        dot.style.left = mx + 'px'; dot.style.top = my + 'px';
+        ring.style.left = rx + 'px'; ring.style.top = ry + 'px';
+        requestAnimationFrame(moveCursor);
+      })();
 
-    document.querySelectorAll('a,button,.album-card,.streaming-item,.tour-item,.rotary-knob,.rotary-item').forEach(el => {
-      el.addEventListener('mouseenter', () => { ring.classList.add('hover'); dot.classList.add('hover'); });
-      el.addEventListener('mouseleave', () => { ring.classList.remove('hover'); dot.classList.remove('hover'); });
-    });
+      document.querySelectorAll('a,button,.album-card,.streaming-item,.tour-item,.rotary-knob,.rotary-item').forEach(el => {
+        el.addEventListener('mouseenter', () => { ring.classList.add('hover'); dot.classList.add('hover'); });
+        el.addEventListener('mouseleave', () => { ring.classList.remove('hover'); dot.classList.remove('hover'); });
+      });
+    }
 
     // ── 2. HERO LOAD ANIMATION ──
     const heroTL = gsap.timeline({ delay: 0.2 });
@@ -3604,7 +3617,13 @@
         return diff > 180 ? 360 - diff : diff;
       }
 
-      function updateActiveCategory(angleDeg) {
+      // Cache tick elements + angles once — avoids querySelectorAll on every drag frame
+      const cachedTicks = Array.from(document.querySelectorAll('.rotary-tick')).map(tick => ({
+        el: tick,
+        angle: parseInt(tick.dataset.angle)
+      }));
+
+      function updateActiveCategory(angleDeg, force) {
         let closestIndex = 0;
         let minDistance = 999;
 
@@ -3616,28 +3635,21 @@
           }
         });
 
+        // Skip all DOM work if the selection hasn't actually changed —
+        // this is the main win for smoothness while dragging.
+        if (closestIndex === activeIndex && !force) return;
         activeIndex = closestIndex;
 
         categories.forEach((cat, idx) => {
-          if (idx === activeIndex) {
-            cat.classList.add('active');
-          } else {
-            cat.classList.remove('active');
-          }
+          cat.classList.toggle('active', idx === activeIndex);
         });
 
         const activeCat = categoryAngles[activeIndex];
         heading.textContent = activeCat.el.querySelector('.rotary-label').textContent;
 
-        // Dynamic Glowing LED Arc tick highlights
-        const ticks = document.querySelectorAll('.rotary-tick');
-        ticks.forEach(tick => {
-          const tickAngle = parseInt(tick.dataset.angle);
-          if (tickAngle <= activeCat.angle) {
-            tick.classList.add('active');
-          } else {
-            tick.classList.remove('active');
-          }
+        // Dynamic Glowing LED Arc tick highlights (cached elements, no re-query)
+        cachedTicks.forEach(tick => {
+          tick.el.classList.toggle('active', tick.angle <= activeCat.angle);
         });
       }
 
@@ -3669,19 +3681,29 @@
         e.preventDefault();
       }
 
+      let pendingAngle = null;
+      let moveRafScheduled = false;
+
+      function applyPendingMove() {
+        moveRafScheduled = false;
+        if (pendingAngle === null) return;
+        const angle = pendingAngle;
+        pendingAngle = null;
+
+        const rotation = angle - 270;
+        knob.style.transform = `rotate(${rotation}deg)`;
+        updateActiveCategory(angle);
+      }
+
       function onMove(e) {
         if (!isDragging) return;
-
-        const angle = getPointerAngle(e);
-        let rotation = angle - 270;
-
-        // Visual knob rotation
-        knob.style.transform = `rotate(${rotation}deg)`;
-
-        // Dynamic target matching
-        updateActiveCategory(angle);
-
         e.preventDefault();
+
+        pendingAngle = getPointerAngle(e);
+        if (!moveRafScheduled) {
+          moveRafScheduled = true;
+          requestAnimationFrame(applyPendingMove);
+        }
       }
 
       function onEnd(e) {
@@ -3736,7 +3758,7 @@
         const snapRotation = 135 - 270; // -135 deg
         knob.style.transition = 'none';
         knob.style.transform = `rotate(${snapRotation}deg)`;
-        updateActiveCategory(135);
+        updateActiveCategory(135, true);
 
         // GSAP menu elements entry animation (Radial Parallax Parallax depth intro)
         gsap.fromTo('#rotary-heading',
